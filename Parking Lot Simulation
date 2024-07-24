@@ -1,0 +1,162 @@
+# Import libraries
+import os
+import csv
+import datetime
+import random
+import string
+import re
+
+# Define the path to the CSV file that contains parking records
+file_path = 'parking_records.csv'
+
+# Function to initialise CSV file with parking records with specific headers
+def create_parking_records_file(file_path):
+    """
+    Create the CSV file with headers if it doesn't exist.
+    """
+    if not os.path.exists(file_path):
+        with open(file_path, 'w', newline='', encoding='utf-8') as file:
+            fieldnames = ['vehicle_number', 'ticket_number', 'entry_time', 'exit_time', 'space_number', 'status', 'duration', 'fee']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+
+# Function to generate parking records from the CSV that incorporates error handling feedback
+def read_parking_records(file_path):
+    """
+    Read parking records from a CSV file.
+    """
+    parking_records = []
+    try:
+        with open(file_path, newline='', encoding='utf-8') as csvfile:
+            csv_reader = csv.DictReader(csvfile)
+            for record in csv_reader:
+                parking_records.append(record)
+    except FileNotFoundError:
+        create_parking_records_file(file_path)
+        return read_parking_records(file_path)
+    except IOError as e:
+        print(f"An error occurred while accessing the file: {e}")
+    return parking_records
+
+# Function to check if the license plate entered meets the UK license plate format
+def is_valid_license_plate(plate):
+    pattern = r'^[A-Z]{2}\d{2} [A-Z]{3}$'
+    return re.match(pattern, plate) is not None
+
+# Function to initialise the parking lot with space, records, availability of spaces
+class ParkingLot:
+    def __init__(self, total_spaces=50, records=None):
+        self.total_spaces = total_spaces
+        self.occupied_spaces = {}
+        self.available_spaces = total_spaces
+        self.spaces = {i: None for i in range(1, total_spaces + 1)}
+        self.records = records if records is not None else {}
+        self.exited_vehicles = {}
+
+    # Function to update parking space records in CSV file
+    # Update parking records to CSV file & include important details
+    def save_parking_records(self, file_path):
+        """
+        Save all parking records (both occupied and exited) to a CSV file.
+        """
+        with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['vehicle_number', 'ticket_number', 'entry_time', 'exit_time', 'space_number', 'status', 'duration', 'fee']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            # Function to process & update records of occupied spaces into CSV file
+            for registration_number, parking_info in self.occupied_spaces.items():
+                row = {
+                    'vehicle_number': registration_number,
+                    'ticket_number': parking_info['ticket_number'],
+                    'entry_time': parking_info['entry_time'].strftime("%Y-%m-%d %H:%M:%S"),
+                    'exit_time': '',  # No exit time for currently parked vehicles
+                    'space_number': parking_info['space_number'],
+                    'status': 'Occupied'
+                }
+                writer.writerow(row)
+            # Function to iterate & format details of exited vehicles to CSV file
+            for registration_number, parking_info in self.exited_vehicles.items():
+                exit_time_str = parking_info.get('exit_time', "Still Parked")
+                exit_time_str = exit_time_str if isinstance(exit_time_str, str) else exit_time_str.strftime("%Y-%m-%d %H:%M:%S")
+                duration = parking_info.get('duration', 0)
+                fee = parking_info.get('fee', 0)
+                row = {
+                    'vehicle_number': registration_number,
+                    'ticket_number': parking_info['ticket_number'],
+                    'entry_time': parking_info['entry_time'].strftime("%Y-%m-%d %H:%M:%S"),
+                    'exit_time': exit_time_str,
+                    'space_number': parking_info['space_number'],
+                    'status': 'Exited',
+                    'duration': f"{duration:.2f}",
+                    'fee': f"£{fee:.2f}"
+                }
+                writer.writerow(row)
+
+    # Function to search & return the next available space in car park, return None if spaces are full
+    def find_next_available_space(self):
+        for space_number, vehicle in self.spaces.items():
+            if vehicle is None:
+                return space_number
+        return None
+
+    # Function to assign space if possible, generates ticket number, returns feedback depending on space
+    def enter_vehicle(self, registration_number):
+        if self.available_spaces <= 0:
+            return "Parking Lot Full", "No available spaces"
+        space_number = self.find_next_available_space()
+        if space_number is None:
+            return "Parking Lot Full", "No available spaces"
+        ticket_number = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
+        entry_time = datetime.datetime.now()
+        self.occupied_spaces[registration_number] = {
+            'ticket_number': ticket_number,
+            'entry_time': entry_time,
+            'space_number': space_number
+        }
+        self.spaces[space_number] = registration_number
+        self.available_spaces -= 1
+        formatted_space_number= f"PS{space_number}"
+        return "Vehicle Entered", f"Vehicle {registration_number} has been issued ticket number {ticket_number} and assigned to parking space {formatted_space_number}."
+
+    # Function to calculate parking fee based on entry & exit time at a £2 rate per hour
+    def calculate_parking_fee(self, entry_time, exit_time, rate_per_hour=2):
+        parking_duration_hours = (exit_time - entry_time).total_seconds() / 3600
+        if parking_duration_hours < 0.0167:  # Parked for less than one minute = free of charge.
+            return 0
+        fee = parking_duration_hours * rate_per_hour
+        return round(fee, 2)
+
+    # Function to process a vehicle's departure, fee calculation and updates parking spaces
+    def exit_vehicle(self, registration_number):
+        if registration_number not in self.occupied_spaces:
+            return "Invalid Ticket", "Ticket number not found."
+        parking_info = self.occupied_spaces.pop(registration_number)
+        exit_time = datetime.datetime.now()
+        parking_info['exit_time'] = exit_time
+        self.spaces[parking_info['space_number']] = None
+        self.available_spaces += 1
+        parking_fee = self.calculate_parking_fee(parking_info['entry_time'], exit_time)
+        parking_info['fee'] = parking_fee
+        self.exited_vehicles[registration_number] = parking_info
+        return "Vehicle Exited", f"Vehicle with registration {registration_number} exited. Fee: £{parking_fee:.2f}"
+
+    # Function to display information about the availability of parking spaces
+    def display_available_spaces(self):
+        return "Available Spaces", f"Available spaces: {self.available_spaces}"
+
+    # Function to retrieve and query parking records for a range of variables based on the ticket number, returns feedback based on input
+    def query_parking_record(self, ticket_number):
+        for records_dict in [self.occupied_spaces, self.exited_vehicles]:
+            for registration_number, parking_info in records_dict.items():
+                if parking_info['ticket_number'] == ticket_number:
+                    entry_time = parking_info['entry_time'].strftime("%Y-%m-%d %H:%M:%S")
+                    exit_time = parking_info.get('exit_time', "Still Parked")
+                    exit_time_str = exit_time if isinstance(exit_time, str) else exit_time.strftime("%Y-%m-%d %H:%M:%S")
+                    fee_time = exit_time if exit_time != "Still Parked" else datetime.datetime.now()
+                    fee = self.calculate_parking_fee(parking_info['entry_time'], fee_time)
+                    space = f"PS{parking_info['space_number']}"
+                    status = "Exited" if exit_time != "Still Parked" else "Parked"
+                    return ("Parking Record", f"Reg: {registration_number} entered at {entry_time} and has {status}. "
+                            f"Space: {space}. Ticket: {ticket_number}. Fee: £{fee:.2f}")
+        # Function to provide feedback if no record is found
+        return "Record Not Found", "No record for the provided ticket number."
